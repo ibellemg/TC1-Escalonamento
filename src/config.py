@@ -1,7 +1,7 @@
 # Configurações gerais do experimento
 
 FILE_PATH = "data/i5x25.xlsx"
-N_RUNS = 5
+N_RUNS = 10
 MAX_ITER = 400
 SEED_BASE = 42
 

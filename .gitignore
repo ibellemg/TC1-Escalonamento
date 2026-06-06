@@ -6,3 +6,10 @@ img/
 
 .gurobi/
 gurobi.lic
+
+.vscode/
+.idea/
+
+*.log
+
+.DS_Store

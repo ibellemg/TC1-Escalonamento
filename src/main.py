@@ -1,24 +1,19 @@
 import pandas as pd
 import numpy as np
-from config import FILE_PATH, N_RUNS, MAX_ITER, SEED_BASE
-from run_functions import (
-    run_single_objective,
-    run_weighted_sum_frontier,
-    run_epsilon_frontier,
-)
-from visualization import (
-    plot_pareto_frontier,
-    plot_two_frontiers,
-    print_pareto_points,
-    plot_frontiers_by_run,
-    print_frontiers_by_run,
-)
-from evaluation import build_makespan_evaluator, build_weighted_tardiness_evaluator
 
+from config import (
+    FILE_PATH,
+    N_RUNS,
+    MAX_ITER,
+    SEED_BASE,
+    MAX_NO_IMPROVE_GLOBAL,
+    MAX_NO_IMPROVE_LOCAL,
+)
 
-# =====================================================================
-# Leitura da instância
-# =====================================================================
+from optimization import run_multiple_times
+from visualization import print_summary_table, plot_convergence, plot_best_schedule
+from evaluation import build_tc1_evaluator, evaluate_objectives
+
 
 def load_instance_from_excel(file_path):
     """
@@ -36,7 +31,7 @@ def load_instance_from_excel(file_path):
     if due_row.empty:
         raise ValueError("Não foi encontrada a linha do DueDate.")
 
-    due_date = int(due_row.iloc[0]["M1"])
+    due_date = float(due_row.iloc[0]["M1"])
 
     df = df[df["Tarefa"].astype(str).str.strip().str.lower() != "duedate"].copy()
     df = df[df["Tarefa"].notna()].copy()
@@ -61,124 +56,70 @@ def print_instance_info(n_tasks, n_machines, due_date, pt, we):
     print(f"Formato WE: {we.shape}")
 
 
-# =====================================================================
-# Configuração dos objetivos
-# =====================================================================
+def build_tasks_order(pt, we):
+    """
+    Define a ordem inicial das tarefas para a heurística construtiva.
 
-def build_evaluator_configs(pt, we, due_date, n_tasks):
-    evaluator_configs = []
+    Como a due date é comum, EDD não diferencia as tarefas.
+    Por isso, usamos uma regra baseada em:
+    - maior peso primeiro;
+    - menor tempo mínimo como desempate.
+    """
+    n_tasks = len(we)
+    tasks = list(range(n_tasks))
+    tasks.sort(key=lambda j: (-we[j], np.min(pt[j, :])))
+    return tasks
 
-    # Para makespan, prioriza tarefas mais longas primeiro.
-    tasks_f1 = list(range(n_tasks))
-    tasks_f1.sort(key=lambda j: -np.min(pt[j, :]))
-
-    evaluator_configs.append({
-        "evaluator": build_makespan_evaluator(we, pt),
-        "tasks": tasks_f1,
-        "name": "f1 (makespan)",
-    })
-
-    # Para atraso ponderado, prioriza maior peso e menor tempo mínimo.
-    # Como a due date é comum, EDD puro não diferencia as tarefas.
-    tasks_f2 = list(range(n_tasks))
-    tasks_f2.sort(key=lambda j: (-we[j], np.min(pt[j, :])))
-
-    evaluator_configs.append({
-        "evaluator": build_weighted_tardiness_evaluator(we, pt, due_date),
-        "tasks": tasks_f2,
-        "name": "f2 (soma ponderada dos atrasos)",
-    })
-
-    return evaluator_configs
-
-
-# =====================================================================
-# Main
-# =====================================================================
 
 def main():
     pt, we, due_date, n_tasks, n_machines = load_instance_from_excel(FILE_PATH)
     print_instance_info(n_tasks, n_machines, due_date, pt, we)
 
-    evaluator_configs = build_evaluator_configs(pt, we, due_date, n_tasks)
+    evaluator = build_tc1_evaluator(we, pt, due_date)
+    tasks = build_tasks_order(pt, we)
 
-    print("\nExecutando otimizações mono-objetivo com GVNS + RVND...")
-    summaries = run_single_objective(evaluator_configs, n_machines, pt, we, due_date)
+    print("\nExecutando GVNS + RVND para a função objetivo do TC1...")
+    print("FO = Cmax + soma ponderada dos atrasos")
 
-    # -----------------------------------------------------------------
-    # Soma Ponderada
-    # -----------------------------------------------------------------
-    print("\nExecutando abordagem multiobjetivo por Soma Ponderada...")
-    weights = np.linspace(0, 1, 11)
-    weighted_all_points, weighted_pareto, weighted_frontiers_by_run = run_weighted_sum_frontier(
-        evaluator_configs,
-        summaries,
+    summary = run_multiple_times(
+        evaluator,
+        tasks,
         n_machines,
-        weights,
+        n_runs=N_RUNS,
+        max_iter=MAX_ITER,
+        seed_base=SEED_BASE,
+        max_no_improve_global=MAX_NO_IMPROVE_GLOBAL,
+        max_no_improve_local=MAX_NO_IMPROVE_LOCAL,
     )
 
-    print_pareto_points(weighted_pareto, "Fronteira não-dominada - Soma Ponderada")
-    plot_pareto_frontier(
-        weighted_pareto,
-        title="Fronteira de Pareto estimada - Soma Ponderada",
-        filename="pareto_soma_ponderada.png",
-    )
-    print_frontiers_by_run(
-        weighted_frontiers_by_run,
-        "05 fronteiras por execução - Soma Ponderada",
-    )
-    plot_frontiers_by_run(
-        weighted_frontiers_by_run,
-        title="05 fronteiras estimadas - Soma Ponderada",
-        filename="pareto_soma_ponderada_5_execucoes.png",
+    print_summary_table(summary, "GVNS + RVND - FO TC1")
+
+    best_solution = summary["best_solution"]
+    cmax, atraso_ponderado, fo_total = evaluate_objectives(best_solution, we, pt, due_date)
+
+    print("\n===== Melhor solução global - GVNS + RVND =====")
+    print(f"FO total = {fo_total:.4f}")
+    print(f"Cmax = {cmax:.4f}")
+    print(f"Atraso ponderado = {atraso_ponderado:.4f}")
+
+    plot_convergence(
+        summary,
+        "Curvas de convergência - GVNS + RVND",
+        filename="convergencia_gvns_rvnd.png",
     )
 
-    # -----------------------------------------------------------------
-    # Epsilon-restrito
-    # -----------------------------------------------------------------
-    print("\nExecutando abordagem multiobjetivo por Epsilon-restrito...")
-
-    # Minimiza f1 sujeito a f2 <= epsilon.
-    # Os epsilons são gerados entre o melhor f2 encontrado e o pior f2 observado
-    # nas soluções da Soma Ponderada, evitando valores totalmente fora da escala.
-    f2_min = min(point["f2"] for point in weighted_all_points)
-    f2_max = max(point["f2"] for point in weighted_all_points)
-    epsilons = np.linspace(f2_min, f2_max, 11)
-
-    epsilon_all_points, epsilon_pareto, epsilon_frontiers_by_run = run_epsilon_frontier(
-        evaluator_configs,
-        summaries,
-        n_machines,
-        epsilons,
-        primary="f1",
+    plot_best_schedule(
+        best_solution,
+        "Melhor solução encontrada pelo GVNS + RVND",
+        pt,
+        we,
+        due_date,
+        filename="gantt_gvns_rvnd.png",
     )
 
-    print_pareto_points(epsilon_pareto, "Fronteira não-dominada - Epsilon-restrito")
-    plot_pareto_frontier(
-        epsilon_pareto,
-        title="Fronteira de Pareto estimada - Epsilon-restrito",
-        filename="pareto_epsilon_restrito.png",
-    )
-    print_frontiers_by_run(
-        epsilon_frontiers_by_run,
-        "05 fronteiras por execução - Epsilon-restrito",
-    )
-    plot_frontiers_by_run(
-        epsilon_frontiers_by_run,
-        title="05 fronteiras estimadas - Epsilon-restrito",
-        filename="pareto_epsilon_restrito_5_execucoes.png",
-    )
-
-    # -----------------------------------------------------------------
-    # Comparação final
-    # -----------------------------------------------------------------
-    plot_two_frontiers(weighted_pareto, epsilon_pareto, filename="pareto_comparativo.png")
-
-    print("\nResumo final:")
-    print(f"Soma Ponderada: {len(weighted_all_points)} soluções geradas; {len(weighted_pareto)} não-dominadas selecionadas.")
-    print(f"Epsilon-restrito: {len(epsilon_all_points)} soluções geradas; {len(epsilon_pareto)} não-dominadas selecionadas.")
-    print("Gráficos salvos na pasta img/.")
-    print("Figuras do item (e): pareto_soma_ponderada_5_execucoes.png e pareto_epsilon_restrito_5_execucoes.png.")
+    print("\nGráficos gerados:")
+    print("img/convergencia_gvns_rvnd.png")
+    print("img/gantt_gvns_rvnd.png")
 
 
 if __name__ == "__main__":

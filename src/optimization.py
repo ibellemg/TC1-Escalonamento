@@ -303,7 +303,7 @@ def run_multiple_times(
 
     return {
         "min": float(np.min(values)),
-        "std": float(np.std(values, ddof=0)),
+        "std": float(np.std(values, ddof=1)),
         "max": float(np.max(values)),
         "best_solution": best_global_sol,
         "best_value": best_global_val,

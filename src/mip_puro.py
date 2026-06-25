@@ -13,14 +13,28 @@ IMG_DIR = os.path.join(BASE_DIR, "img")
 
 def carregar_instancia(caminho):
     df = pd.read_excel(caminho)
+    df = df.dropna(how="all").reset_index(drop=True)
+
+    # Se a planilha nova já veio com colunas Tarefa, M1, ..., Peso
+    if "Tarefa" in df.columns and "M1" in df.columns:
+        pass
+    else:
+        # Compatibilidade com a planilha original
+        df.columns = ["Tarefa", "M1", "M2", "M3", "M4", "M5", "Peso"]
 
     due_row = df[df["Tarefa"].astype(str).str.strip().str.lower() == "duedate"]
-    due_date = float(due_row.iloc[0]["Máquina"])
+    if due_row.empty:
+        raise ValueError("Não foi encontrada a linha DueDate.")
 
-    df = df[df["Tarefa"].notna()].copy()
+    due_date = float(due_row.iloc[0]["M1"])
+
     df = df[df["Tarefa"].astype(str).str.strip().str.lower() != "duedate"].copy()
+    df = df[df["Tarefa"].notna()].copy()
+    df["Tarefa"] = df["Tarefa"].astype(int)
+    df = df.sort_values("Tarefa").reset_index(drop=True)
 
-    tempos = df[["Máquina", "Unnamed: 2", "Unnamed: 3", "Unnamed: 4", "Unnamed: 5"]].astype(float).to_numpy()
+    machine_cols = [col for col in df.columns if str(col).startswith("M")]
+    tempos = df[machine_cols].astype(float).to_numpy()
     pesos = df["Peso"].astype(float).to_numpy()
 
     n_tarefas = tempos.shape[0]
